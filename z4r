@@ -1,13 +1,29 @@
 #!/bin/sh
 
-BRANCH="master"
-RAW_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/${BRANCH}"
-MIRROR_URL="http://mizulina.shit.vc:666/IndeecFOX/zapret4rocket/${BRANCH}"
-API_URL="https://api.github.com/repos/IndeecFOX/zapret4rocket/contents/lib?ref=${BRANCH}"
+# Change this value to switch all project-owned repositories to another owner.
+Z4R_GITHUB_OWNER="${Z4R_GITHUB_OWNER:-serogaq}"
+
+Z4R_PROJECT_REPO="${Z4R_PROJECT_REPO:-zapret4rocket}"
+Z4R_PROJECT_REF="${Z4R_PROJECT_REF:-master}"
+Z4R_LAUNCHER_REPO="${Z4R_LAUNCHER_REPO:-z4r}"
+Z4R_LAUNCHER_REF="${Z4R_LAUNCHER_REF:-main}"
+Z4R_MIRROR_HOST="${Z4R_MIRROR_HOST:-http://mizulina.shit.vc:666}"
+
+Z4R_PROJECT_SLUG="$Z4R_GITHUB_OWNER/$Z4R_PROJECT_REPO"
+Z4R_LAUNCHER_SLUG="$Z4R_GITHUB_OWNER/$Z4R_LAUNCHER_REPO"
+Z4R_RAW_BASE="https://raw.githubusercontent.com/$Z4R_PROJECT_SLUG/$Z4R_PROJECT_REF"
+Z4R_API_BASE="https://api.github.com/repos/$Z4R_PROJECT_SLUG"
+Z4R_MIRROR_BASE="$Z4R_MIRROR_HOST/$Z4R_PROJECT_SLUG/$Z4R_PROJECT_REF"
+Z4R_LAUNCHER_RAW_BASE="https://raw.githubusercontent.com/$Z4R_LAUNCHER_SLUG/$Z4R_LAUNCHER_REF"
+Z4R_LAUNCHER_MIRROR_BASE="$Z4R_MIRROR_HOST/$Z4R_LAUNCHER_SLUG/$Z4R_LAUNCHER_REF"
+
+API_URL="$Z4R_API_BASE/contents/lib?ref=$Z4R_PROJECT_REF"
 INSTALL_DIR="/opt"
-INSTALLER_URL="https://raw.githubusercontent.com/IndeecFOX/z4r/main/z4r"
-INSTALLER_MIRROR_URL="http://mizulina.shit.vc:666/IndeecFOX/z4r/main/z4r"
-LIB_FILES_FALLBACK="ui.sh provider.sh telemetry.sh recommendations.sh netcheck.sh premium.sh strategies.sh submenus.sh actions.sh"
+LIB_FILES_FALLBACK="repository.sh ui.sh provider.sh telemetry.sh recommendations.sh netcheck.sh premium.sh strategies.sh submenus.sh actions.sh"
+
+# Передаем выбранные репозитории и ветки загруженному z4r.sh.
+export Z4R_GITHUB_OWNER Z4R_PROJECT_REPO Z4R_PROJECT_REF
+export Z4R_LAUNCHER_REPO Z4R_LAUNCHER_REF Z4R_MIRROR_HOST
 
 # Определение пути для команды z4r
 if [ -d /opt/bin ]; then
@@ -38,52 +54,53 @@ else
     exit 1
 fi
 
-# Определение откуда запущен скрипт
-mirror_url() {
-    local path="$1"
-    echo "${MIRROR_URL}/${path}?h=${BRANCH}"
-}
+# Атомарная загрузка с резервным зеркалом: существующий файл не повреждается,
+# если оба источника временно недоступны.
+download_url_pair() {
+    destination="$1"
+    primary_url="$2"
+    fallback_url="$3"
+    fallback_description="$4"
+    temporary_file="${destination}.tmp.$$"
 
-download_url() {
-    local dest="$1"
-    local url="$2"
-
-    $DL_CMD "$dest" $DL_TIMEOUT "$url" 2>/dev/null
-}
-
-download_project_file() {
-    local dest="$1"
-    local path="$2"
-    local tmp="${dest}.tmp.$$"
-
-    mkdir -p "$(dirname "$dest")"
-
-    if download_url "$tmp" "$RAW_URL/$path"; then
-        mv -f "$tmp" "$dest"
+    rm -f "$temporary_file"
+    if $DL_CMD "$temporary_file" $DL_TIMEOUT "$primary_url" 2>/dev/null; then
+        mv "$temporary_file" "$destination"
         return 0
     fi
 
-    echo "GitHub недоступен для $path. Пробую зеркало..."
-    if download_url "$tmp" "$(mirror_url "$path")"; then
-        mv -f "$tmp" "$dest"
+    rm -f "$temporary_file"
+    echo "GitHub недоступен для $fallback_description. Пробую зеркало..."
+    if $DL_CMD "$temporary_file" $DL_TIMEOUT "$fallback_url" 2>/dev/null; then
+        mv "$temporary_file" "$destination"
         return 0
     fi
 
-    rm -f "$tmp"
+    rm -f "$temporary_file"
     return 1
 }
 
-download_installer() {
-    local dest="$1"
-
-    if download_url "$dest" "$INSTALLER_URL"; then
-        return 0
-    fi
-
-    echo "GitHub недоступен для установщика. Пробую зеркало..."
-    download_url "$dest" "$INSTALLER_MIRROR_URL"
+download_project_file() {
+    destination="$1"
+    path="$2"
+    download_url_pair \
+        "$destination" \
+        "$Z4R_RAW_BASE/$path" \
+        "$Z4R_MIRROR_BASE/$path?h=$Z4R_PROJECT_REF" \
+        "$path"
 }
 
+download_launcher_file() {
+    destination="$1"
+    path="${2:-z4r}"
+    download_url_pair \
+        "$destination" \
+        "$Z4R_LAUNCHER_RAW_BASE/$path" \
+        "$Z4R_LAUNCHER_MIRROR_BASE/$path" \
+        "установщика"
+}
+
+# Определение откуда запущен скрипт
 if which readlink >/dev/null 2>&1; then
     SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "$0")
 elif which realpath >/dev/null 2>&1; then
@@ -97,7 +114,7 @@ if [ "$SCRIPT_PATH" = "$BIN_PATH" ]; then
     echo "Проверка обновлений установщика..."
     TEMP_INSTALLER="/tmp/z4r_inst_$$"
 
-    if download_installer "$TEMP_INSTALLER"; then
+    if download_launcher_file "$TEMP_INSTALLER"; then
         if ! cmp "$SCRIPT_PATH" "$TEMP_INSTALLER" >/dev/null 2>&1; then
             echo "✓ Найдено обновление установщика"
             cp "$TEMP_INSTALLER" "$BIN_PATH"
@@ -144,6 +161,12 @@ LIB_FILES=$(grep '"name":' "$TEMP_JSON" 2>/dev/null | grep '\.sh"' | sed 's/.*"n
 if [ -z "$LIB_FILES" ]; then
     LIB_FILES="$LIB_FILES_FALLBACK"
 fi
+
+# repository.sh нужен новой версии z4r.sh до загрузки остальных библиотек.
+case " $LIB_FILES " in
+    *" repository.sh "*) ;;
+    *) LIB_FILES="repository.sh $LIB_FILES" ;;
+esac
 rm -f "$TEMP_JSON"
 
 # Параллельная загрузка z4r.sh и библиотек
@@ -161,17 +184,16 @@ for file in $LIB_FILES; do
 done
 wait
 
-if [ ! -s "${INSTALL_DIR}/z4r.sh" ]; then
-    echo "Ошибка: не удалось загрузить z4r.sh"
+MISSING_FILES=""
+[ -s "${INSTALL_DIR}/z4r.sh" ] || MISSING_FILES="z4r.sh"
+for file in $LIB_FILES; do
+    [ -s "${INSTALL_DIR}/zapret/z4r_lib/${file}" ] || MISSING_FILES="$MISSING_FILES $file"
+done
+
+if [ -n "$MISSING_FILES" ]; then
+    echo "Ошибка: не удалось загрузить обязательные компоненты:$MISSING_FILES"
     exit 1
 fi
-
-for file in $LIB_FILES; do
-    if [ ! -s "${INSTALL_DIR}/zapret/z4r_lib/${file}" ]; then
-        echo "Ошибка: не удалось загрузить lib/${file}"
-        exit 1
-    fi
-done
 
 echo "✓ Компоненты загружены"
 echo ""
