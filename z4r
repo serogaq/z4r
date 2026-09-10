@@ -44,11 +44,11 @@ fi
 
 # Проверка wget или curl
 if which curl >/dev/null 2>&1; then
-    DL_CMD="curl -sS -fL -o"
-    DL_TIMEOUT="--max-time 3"
+    DL_CMD="curl -f -sS -L -o"
+    DL_TIMEOUT="--connect-timeout 10 --max-time 30"
 elif which wget >/dev/null 2>&1; then
     DL_CMD="wget -q -O"
-    DL_TIMEOUT="-T 3"
+    DL_TIMEOUT="-T 30"
 else
     echo "Ошибка: wget или curl не найдены"
     exit 1
@@ -60,6 +60,7 @@ download_url_pair() {
     destination="$1"
     primary_url="$2"
     fallback_url="$3"
+    fallback_description="$4"
     temporary_file="${destination}.tmp.$$"
 
     rm -f "$temporary_file"
@@ -69,6 +70,7 @@ download_url_pair() {
     fi
 
     rm -f "$temporary_file"
+    echo "GitHub недоступен для $fallback_description. Пробую зеркало..."
     if $DL_CMD "$temporary_file" $DL_TIMEOUT "$fallback_url" 2>/dev/null; then
         mv "$temporary_file" "$destination"
         return 0
@@ -81,13 +83,21 @@ download_url_pair() {
 download_project_file() {
     destination="$1"
     path="$2"
-    download_url_pair "$destination" "$Z4R_RAW_BASE/$path" "$Z4R_MIRROR_BASE/$path"
+    download_url_pair \
+        "$destination" \
+        "$Z4R_RAW_BASE/$path" \
+        "$Z4R_MIRROR_BASE/$path?h=$Z4R_PROJECT_REF" \
+        "$path"
 }
 
 download_launcher_file() {
     destination="$1"
     path="${2:-z4r}"
-    download_url_pair "$destination" "$Z4R_LAUNCHER_RAW_BASE/$path" "$Z4R_LAUNCHER_MIRROR_BASE/$path"
+    download_url_pair \
+        "$destination" \
+        "$Z4R_LAUNCHER_RAW_BASE/$path" \
+        "$Z4R_LAUNCHER_MIRROR_BASE/$path" \
+        "установщика"
 }
 
 # Определение откуда запущен скрипт
